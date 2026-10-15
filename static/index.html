@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UsageLens — System Usage Dashboard</title>
-<link rel="stylesheet" href="/style.css?v=20">
+<link rel="stylesheet" href="/style.css?v=25">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -205,6 +205,14 @@
           <div class="chart-scroll"><canvas id="loadChart"></canvas></div>
         </div>
 
+        <div class="chart-card" id="gpuChartCard" style="display:none">
+          <div class="chart-card-header">
+            <h3>GPU utilization over time</h3>
+            <span class="muted-note">Average and peak GPU utilization (%) per day from rocm-smi</span>
+          </div>
+          <div class="chart-scroll"><canvas id="gpuChart"></canvas></div>
+        </div>
+
         <div class="chart-card">
           <div class="chart-card-header">
             <h3>User activity heatmap — hour of day x date</h3>
@@ -229,6 +237,6 @@
   </section>
 </main>
 
-<script src="/app.js?v=20"></script>
+<script src="/app.js?v=25"></script>
 </body>
 </html>

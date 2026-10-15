@@ -18,8 +18,9 @@ from .ssh_client import connect, run_command, run_command_via_jump, SSHConnectEr
 WHO_COMMAND = "who"
 UPTIME_COMMAND = "uptime"
 LAST_COMMAND = "last -w -500"
+ROCM_SMI_COMMAND = "rocm-smi --showuse 2>/dev/null || nvidia-smi --query-gpu=index,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo NO_GPU"
 
-BUILTIN_COMMANDS = [WHO_COMMAND, UPTIME_COMMAND, LAST_COMMAND]
+BUILTIN_COMMANDS = [WHO_COMMAND, UPTIME_COMMAND, LAST_COMMAND, ROCM_SMI_COMMAND]
 DEFAULT_COMMANDS = []
 
 
@@ -42,6 +43,8 @@ def _cmd_label(cmd):
         return "uptime (load)"
     if cmd.strip().startswith("last"):
         return "last (login history)"
+    if cmd.strip() == ROCM_SMI_COMMAND:
+        return "GPU utilization"
     return cmd[:50] + ("…" if len(cmd) > 50 else "")
 
 
@@ -89,6 +92,7 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
         who_out = ""
         uptime_out = ""
         last_out = ""
+        gpu_raw = ""
         extra_outputs = {}
 
         def _run(cmd):
@@ -106,6 +110,8 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
                 uptime_out = out
             elif cmd.strip().startswith("last"):
                 last_out = out
+            elif cmd.strip() == ROCM_SMI_COMMAND:
+                gpu_raw = out if "NO_GPU" not in out else ""
             else:
                 extra_outputs[cmd] = out if exit_code == 0 else f"[exit {exit_code}] {out}{err}"
 
@@ -117,6 +123,7 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
             "who": who_out,
             "uptime": uptime_out,
             "last": last_out,
+            "gpu": gpu_raw,
             "extra_command_outputs": extra_outputs,
             "error": None,
         }
@@ -127,6 +134,7 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
             "who": "",
             "uptime": "",
             "last": "",
+            "gpu": "",
             "extra_command_outputs": {},
             "error": str(exc),
         }

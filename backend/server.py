@@ -283,21 +283,21 @@ def get_dashboard(range: str = "7d"):
     all_hosts = storage.load_hosts()["hosts"]
     result = []
     for h in all_hosts:
-        history = analytics.build_history(h["id"], range)
-        total_hours = round(sum(u["total_hours"] for u in history.get("user_summary", [])), 1)
-        snaps = analytics._all_snapshots_for_host(h["id"])
-        last_collected = snaps[-1]["collected_at"] if snaps else None
+        summary = analytics.dashboard_summary(h["id"], range)
         result.append({
             "host_id": h["id"],
             "name": h.get("name", h["hostname"]),
             "hostname": h["hostname"],
-            "snapshot_count": history["snapshot_count"],
-            "distinct_users": history["distinct_users"],
-            "user_summary": history.get("user_summary", []),
-            "total_hours": total_hours,
-            "last_collected": last_collected,
-            "range_start": history["range_start"],
-            "range_end": history["range_end"],
+            "snapshot_count": summary["snapshot_count"],
+            "distinct_users": summary["distinct_users"],
+            "user_summary": summary["user_summary"],
+            "total_hours": summary["used_hours"],
+            "total_hours_in_range": summary["total_hours_in_range"],
+            "used_hours": summary["used_hours"],
+            "idle_hours": summary["idle_hours"],
+            "last_collected": summary["last_collected"],
+            "range_start": summary["range_start"],
+            "range_end": summary["range_end"],
         })
     return {"hosts": result}
 

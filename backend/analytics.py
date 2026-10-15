@@ -84,6 +84,24 @@ def _parse(ts):
 
 # ========== Parsers ==========
 
+_GPU_USE_RE = re.compile(r"GPU\[(\d+)\]\s*:\s*GPU use \(%\):\s*(\d+)")
+_NVIDIA_RE = re.compile(r"^\s*(\d+)\s*,\s*(\d+)")
+
+
+def parse_gpu(gpu_text):
+    """Parse rocm-smi --showuse or nvidia-smi CSV into [{gpu_id, utilization}]."""
+    gpus = []
+    for line in (gpu_text or "").splitlines():
+        m = _GPU_USE_RE.search(line)
+        if m:
+            gpus.append({"gpu_id": int(m.group(1)), "utilization": int(m.group(2))})
+            continue
+        m = _NVIDIA_RE.match(line)
+        if m:
+            gpus.append({"gpu_id": int(m.group(1)), "utilization": int(m.group(2))})
+    return gpus
+
+
 def parse_who(who_text):
     sessions = []
     for line in (who_text or "").splitlines():
@@ -252,14 +270,17 @@ def get_snapshot_detail(host_id, collected_at):
     who_sessions = parse_who(snap.get("who", ""))
     uptime_info = parse_uptime(snap.get("uptime", ""))
     last_records = parse_last(snap.get("last", ""))
+    gpu_data = parse_gpu(snap.get("gpu", ""))
     return {
         "collected_at": snap["collected_at"],
         "who_sessions": who_sessions,
         "uptime": uptime_info,
         "last_records": last_records,
+        "gpu": gpu_data,
         "who_raw": snap.get("who", ""),
         "uptime_raw": snap.get("uptime", ""),
         "last_raw": snap.get("last", ""),
+        "gpu_raw": snap.get("gpu", ""),
         "extra_command_outputs": snap.get("extra_command_outputs", {}),
     }
 
@@ -276,16 +297,19 @@ def _collect_all_login_records(snaps):
 
 
 def _daily_buckets(snaps, login_records):
-    """Build daily stats from login records + uptime data."""
+    """Build daily stats from login records + uptime/GPU data."""
     by_day = {}
 
-    for rec in login_records:
-        login_dt = _parse(rec["login_dt"])
-        day = rec["login_dt"][:10]
-        bucket = by_day.setdefault(day, {
+    def _init_day(day):
+        return {
             "date": day, "users": set(), "session_count": 0, "total_minutes": 0,
             "load_1m_values": [], "load_5m_values": [], "load_15m_values": [],
-        })
+            "gpu_avg_values": [], "gpu_max_values": [], "gpu_count": 0,
+        }
+
+    for rec in login_records:
+        day = rec["login_dt"][:10]
+        bucket = by_day.setdefault(day, _init_day(day))
         bucket["users"].add(rec["user"])
         bucket["session_count"] += 1
         bucket["total_minutes"] += rec["duration_min"]
@@ -293,13 +317,16 @@ def _daily_buckets(snaps, login_records):
     for snap in snaps:
         day = snap["collected_at"][:10]
         uptime_info = parse_uptime(snap.get("uptime", ""))
-        bucket = by_day.setdefault(day, {
-            "date": day, "users": set(), "session_count": 0, "total_minutes": 0,
-            "load_1m_values": [], "load_5m_values": [], "load_15m_values": [],
-        })
+        gpus = parse_gpu(snap.get("gpu", ""))
+        bucket = by_day.setdefault(day, _init_day(day))
         bucket["load_1m_values"].append(uptime_info["load_1m"])
         bucket["load_5m_values"].append(uptime_info["load_5m"])
         bucket["load_15m_values"].append(uptime_info["load_15m"])
+        if gpus:
+            utils = [g["utilization"] for g in gpus]
+            bucket["gpu_avg_values"].append(round(sum(utils) / len(utils), 1))
+            bucket["gpu_max_values"].append(max(utils))
+            bucket["gpu_count"] = max(bucket["gpu_count"], len(gpus))
 
     daily = []
     for day in sorted(by_day):
@@ -314,6 +341,9 @@ def _daily_buckets(snaps, login_records):
             "avg_load_1m": avg(b["load_1m_values"]),
             "avg_load_5m": avg(b["load_5m_values"]),
             "avg_load_15m": avg(b["load_15m_values"]),
+            "avg_gpu_util": avg(b["gpu_avg_values"]),
+            "max_gpu_util": max(b["gpu_max_values"]) if b["gpu_max_values"] else 0,
+            "gpu_count": b["gpu_count"],
         })
     return daily
 
@@ -407,4 +437,31 @@ def build_history(host_id, range_key):
         "daily": daily,
         "heatmap": _heatmap(records_in_range),
         "user_summary": _user_summary(records_in_range),
+    }
+
+
+def dashboard_summary(host_id, range_key):
+    """Lightweight version of build_history — only user hours, no daily/heatmap."""
+    days = RANGE_DAYS.get(range_key, 7)
+    total_hours_in_range = round(days * 24, 1)
+    snaps, range_start, range_end = _snapshots_for_host(host_id, range_key)
+    records = _collect_all_login_records(snaps)
+    range_start_naive = range_start.replace(tzinfo=None)
+    records_in_range = [r for r in records if _parse(r["login_dt"]).replace(tzinfo=None) >= range_start_naive]
+    user_summary = _user_summary(records_in_range)
+    user_hours_total = round(sum(u["total_hours"] for u in user_summary), 1)
+    # Concurrent sessions can make user-hours exceed the period — cap utilization at 100%
+    used_hours = min(user_hours_total, total_hours_in_range)
+    idle_hours = round(max(0, total_hours_in_range - used_hours), 1)
+    last_collected = snaps[-1]["collected_at"] if snaps else None
+    return {
+        "snapshot_count": len(snaps),
+        "distinct_users": sorted(set(u["user"] for u in user_summary)),
+        "user_summary": user_summary,
+        "total_hours_in_range": total_hours_in_range,
+        "used_hours": used_hours,
+        "idle_hours": idle_hours,
+        "last_collected": last_collected,
+        "range_start": range_start.replace(microsecond=0).isoformat(),
+        "range_end": range_end.replace(microsecond=0).isoformat(),
     }

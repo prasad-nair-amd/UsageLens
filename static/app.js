@@ -27,6 +27,7 @@ function escapeHtml(s) {
 }
 
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n - 1) + "…" : (s || ""); }
+function round1(v) { return Math.round(v * 10) / 10; }
 
 function getCssVar(name) {
   return getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -259,31 +260,41 @@ $("btnCollectAll").addEventListener("click", async () => {
   const statusEl = $("collectAllStatus");
   btn.disabled = true;
   btn.textContent = "Collecting…";
-  statusEl.textContent = "";
-  statusEl.className = "ops-status";
 
-  let done = 0;
   const total = hosts.length;
-  const results = [];
+  statusEl.innerHTML = hosts.map(h =>
+    `<div class="collect-all-row" id="ca_${h.id}"><span class="step-icon ca-pending">&#8943;</span> ${escapeHtml(h.name)} — <span class="ca-msg">waiting</span></div>`
+  ).join("");
+  statusEl.className = "collect-all-status";
 
-  for (const host of hosts) {
-    statusEl.textContent = `Collecting ${done + 1}/${total}: ${host.name}…`;
-    try {
-      const snapshot = await api(`/api/hosts/${host.id}/collect`, { method: "POST" });
-      results.push({ name: host.name, ok: !snapshot.error, msg: snapshot.error || "OK" });
-    } catch (err) {
-      results.push({ name: host.name, ok: false, msg: err.message });
-    }
-    done++;
+  function updateRow(hostId, state, msg) {
+    const row = document.getElementById("ca_" + hostId);
+    if (!row) return;
+    const icon = row.querySelector(".step-icon");
+    const msgEl = row.querySelector(".ca-msg");
+    icon.className = "step-icon ca-" + state;
+    icon.innerHTML = state === "done" ? "&#10003;" : state === "error" ? "&#10007;" : "&#8943;";
+    msgEl.textContent = msg;
   }
 
-  const succeeded = results.filter(r => r.ok).length;
-  const failed = results.filter(r => !r.ok);
-  statusEl.textContent = `Collected ${succeeded}/${total} hosts` + (failed.length ? ` — failed: ${failed.map(f => f.name).join(", ")}` : "");
-  statusEl.className = "ops-status " + (failed.length ? "err" : "ok");
+  let succeeded = 0;
+  for (const host of hosts) {
+    updateRow(host.id, "active", "collecting…");
+    try {
+      const snapshot = await api(`/api/hosts/${host.id}/collect`, { method: "POST" });
+      if (snapshot.error) {
+        updateRow(host.id, "error", snapshot.error);
+      } else {
+        succeeded++;
+        updateRow(host.id, "done", "collected");
+      }
+    } catch (err) {
+      updateRow(host.id, "error", err.message);
+    }
+  }
+
   btn.disabled = false;
   btn.textContent = "Collect all";
-  await loadAll();
   loadOverviewDashboard();
 });
 
@@ -601,13 +612,21 @@ function renderSnapshotDetail(detail) {
   const stillIn = lastRecs.filter(r => r.still_logged_in);
   const totalHours = Math.round(lastRecs.reduce((s, r) => s + r.duration_min, 0) / 60 * 10) / 10;
 
+  // GPU stat
+  const gpus = detail.gpu || [];
+  const gpuAvg = gpus.length ? Math.round(gpus.reduce((s, g) => s + g.utilization, 0) / gpus.length) : null;
+
   // Stat cards
-  $("snapStatCards").innerHTML = [
+  const cards = [
     { label: "Users (login history)", value: distinctLast.length, sub: distinctLast.slice(0, 5).join(", ") || "—" },
     { label: "Login sessions", value: lastRecs.length, sub: `${stillIn.length} still logged in` },
     { label: "Total time spent", value: totalHours + "h", sub: "Across all users and sessions" },
     { label: "Load average", value: `${u.load_1m} / ${u.load_5m} / ${u.load_15m}`, sub: "1 min / 5 min / 15 min" },
-  ].map(c => `
+  ];
+  if (gpus.length) {
+    cards.push({ label: `GPU utilization (${gpus.length} GPUs)`, value: gpuAvg + "%", sub: gpus.map(g => `GPU${g.gpu_id}: ${g.utilization}%`).join(" · ") });
+  }
+  $("snapStatCards").innerHTML = cards.map(c => `
     <div class="stat-card">
       <div class="stat-label">${escapeHtml(c.label)}</div>
       <div class="stat-value">${escapeHtml(String(c.value))}</div>
@@ -728,6 +747,7 @@ function renderTrends(history) {
   renderTrendStatCards(history);
   renderUsersChart(history.daily);
   renderLoadChart(history.daily);
+  renderGpuChart(history.daily);
   renderHeatmap(history.heatmap);
   renderUserSummaryTable(history.user_summary);
 }
@@ -796,6 +816,36 @@ function renderLoadChart(daily) {
     },
   });
   $("loadChart").parentElement.style.height = "240px";
+}
+
+let gpuChart = null;
+function renderGpuChart(daily) {
+  const hasGpu = daily.some(d => d.gpu_count > 0);
+  $("gpuChartCard").style.display = hasGpu ? "" : "none";
+  if (!hasGpu) return;
+
+  destroyExistingChart($("gpuChart"));
+  const ctx = $("gpuChart").getContext("2d");
+  const gpuCount = Math.max(...daily.map(d => d.gpu_count || 0));
+  gpuChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: daily.map(d => d.date),
+      datasets: [
+        { label: `Avg GPU util (${gpuCount} GPUs)`, data: daily.map(d => d.avg_gpu_util), borderColor: resolvedColor("var(--series-5)"), backgroundColor: resolvedColor("var(--series-5)") + "22", fill: true, tension: 0.3, borderWidth: 2, pointRadius: 3 },
+        { label: "Peak GPU util", data: daily.map(d => d.max_gpu_util), borderColor: resolvedColor("var(--series-8)"), backgroundColor: resolvedColor("var(--series-8)"), tension: 0.3, borderWidth: 2, pointRadius: 3, borderDash: [5, 3] },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { grid: { color: getCssVar("--gridline") }, ticks: { color: getCssVar("--text-muted") } },
+        y: { beginAtZero: true, max: 100, grid: { color: getCssVar("--gridline") }, ticks: { color: getCssVar("--text-muted"), callback: v => v + "%" } },
+      },
+      plugins: { legend: { position: "top", labels: { color: getCssVar("--text-secondary") } } },
+    },
+  });
+  $("gpuChart").parentElement.style.height = "240px";
 }
 
 function renderHeatmap(heatmap) {
@@ -901,27 +951,25 @@ function renderOverviewGrid(hostData) {
     card.style.cursor = "pointer";
     card.addEventListener("click", () => showOpsPage(h.host_id));
 
-    if (!h.user_summary.length) {
-      card.innerHTML = `
-        <div class="overview-card-header">
-          <h3>${escapeHtml(h.name)}</h3>
-          <span class="muted-note">${escapeHtml(h.hostname)}</span>
-        </div>
-        ${periodLine}
-        <div class="overview-card-stat">
-          <span class="stat-value">0h</span>
-          <span class="stat-sub">No activity in ${RANGE_LABELS[overviewRange]}</span>
-        </div>
-        <div class="overview-empty">No login data — click to open</div>
-      `;
-      grid.appendChild(card);
-      return;
-    }
+    const totalRange = h.total_hours_in_range || 720;
+    const usedH = h.used_hours || 0;
+    const idleH = h.idle_hours || 0;
+    const pctUsed = totalRange > 0 ? Math.min(100, Math.round((usedH / totalRange) * 100)) : 0;
 
-    const users = h.user_summary;
+    const users = h.user_summary || [];
+    const rawUserHours = users.map(u => u.total_hours);
+    const rawTotal = rawUserHours.reduce((a, b) => a + b, 0) || 1;
+
+    // Scale user segments so they + idle = totalRange (handles concurrent sessions)
+    const scaledUserHours = rawUserHours.map(h => round1(h / rawTotal * usedH));
     const userLabels = users.map(u => u.user);
-    const userHours = users.map(u => u.total_hours);
+    const chartData = [...scaledUserHours];
     const colors = users.map((_, i) => resolvedColor(SERIES_COLORS[i % SERIES_COLORS.length]));
+    if (idleH > 0) {
+      userLabels.push("Idle");
+      chartData.push(idleH);
+      colors.push(getCssVar("--gridline"));
+    }
 
     card.innerHTML = `
       <div class="overview-card-header">
@@ -930,8 +978,8 @@ function renderOverviewGrid(hostData) {
       </div>
       ${periodLine}
       <div class="overview-card-stat">
-        <span class="stat-value">${h.total_hours}h</span>
-        <span class="stat-sub">${h.distinct_users.length} user${h.distinct_users.length !== 1 ? "s" : ""} · ${h.snapshot_count} snapshot${h.snapshot_count !== 1 ? "s" : ""}</span>
+        <span class="stat-value">${pctUsed}% used</span>
+        <span class="stat-sub">${usedH}h active / ${totalRange}h total · ${h.distinct_users.length} user${h.distinct_users.length !== 1 ? "s" : ""}</span>
       </div>
       <div class="overview-chart-wrap"><canvas id="${canvasId}"></canvas></div>
       <div class="overview-legend" id="legend_${idx}"></div>
@@ -944,7 +992,7 @@ function renderOverviewGrid(hostData) {
       data: {
         labels: userLabels,
         datasets: [{
-          data: userHours,
+          data: chartData,
           backgroundColor: colors,
           borderWidth: 2,
           borderColor: getCssVar("--surface-1"),
@@ -958,7 +1006,10 @@ function renderOverviewGrid(hostData) {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label(ctx) { return `${ctx.label}: ${ctx.parsed}h`; },
+              label(ctx) {
+                const pct = totalRange > 0 ? Math.round((ctx.parsed / totalRange) * 100) : 0;
+                return `${ctx.label}: ${ctx.parsed}h (${pct}%)`;
+              },
             },
           },
         },
@@ -969,7 +1020,7 @@ function renderOverviewGrid(hostData) {
     const legendEl = document.getElementById(`legend_${idx}`);
     legendEl.innerHTML = users.map((u, i) =>
       `<span class="overview-legend-item"><span class="legend-swatch" style="background:${colors[i]}"></span>${escapeHtml(u.user)} (${u.total_hours}h)</span>`
-    ).join("");
+    ).join("") + `<span class="overview-legend-item"><span class="legend-swatch" style="background:${getCssVar("--gridline")}"></span>Idle (${idleH}h)</span>`;
   });
 }
 
