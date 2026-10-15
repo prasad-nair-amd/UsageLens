@@ -1,0 +1,25 @@
+# Sensitive data — passwords, SSH keys, collected snapshots
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Lock files
+*.lock
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
