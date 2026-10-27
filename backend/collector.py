@@ -13,7 +13,7 @@ import datetime as dt
 import sys
 
 from . import storage
-from .ssh_client import connect, run_command, run_command_via_jump, SSHConnectError
+from .ssh_client import connect, _connect_direct, run_command, run_command_via_jump, run_command_via_slurm, SSHConnectError
 
 WHO_COMMAND = "who"
 UPTIME_COMMAND = "uptime"
@@ -59,9 +59,13 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
             on_progress(step, total, msg)
 
     collected_at = _now_iso()
+    access_mode = host_cfg.get("access_mode") or "direct"
+    if access_mode == "direct" and host_cfg.get("jump_enabled") and host_cfg.get("jump_hostname"):
+        access_mode = "jump_host"
 
     jump_cfg = None
-    if host_cfg.get("jump_enabled") and host_cfg.get("jump_hostname"):
+    slurm_cfg = None
+    if access_mode == "jump_host" and host_cfg.get("jump_hostname"):
         jump_cfg = {
             "hostname": host_cfg["jump_hostname"],
             "port": host_cfg.get("jump_port") or 22,
@@ -69,6 +73,15 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
             "auth_method": host_cfg.get("jump_auth_method") or "identity_file",
             "identity_file": host_cfg.get("jump_identity_file"),
             "password": host_cfg.get("jump_password"),
+        }
+    elif access_mode == "slurm":
+        slurm_cfg = {
+            "hostname": host_cfg["hostname"],
+            "port": host_cfg.get("port") or 22,
+            "username": host_cfg.get("username") or "",
+            "auth_method": host_cfg.get("auth_method") or "identity_file",
+            "identity_file": host_cfg.get("identity_file"),
+            "password": host_cfg.get("password"),
         }
 
     user_commands = [c for c in (host_cfg.get("commands") or []) if c.strip()]
@@ -79,15 +92,21 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
     jump_client = None
     jump_alias = host_cfg.get("jump_alias")
     use_jump_alias = bool(jump_cfg and jump_alias)
+    salloc_cmd = host_cfg.get("slurm_salloc_cmd", "")
+    setup_cmds = host_cfg.get("slurm_setup_commands") or []
 
     try:
-        if jump_cfg:
+        if slurm_cfg:
+            emit(1, total_steps, f"Connecting to Slurm controller ({slurm_cfg['hostname']})…")
+            client = _connect_direct(slurm_cfg)
+        elif jump_cfg:
             emit(1, total_steps, f"Connecting to jump host ({jump_cfg['hostname']})…")
+            client, jump_client = connect(host_cfg, jump_host_cfg=jump_cfg)
+            if use_jump_alias:
+                emit(1, total_steps, f"Connected via jump host — target alias '{jump_alias}'")
         else:
             emit(1, total_steps, f"Connecting to {host_cfg.get('name', host_cfg['hostname'])}…")
-        client, jump_client = connect(host_cfg, jump_host_cfg=jump_cfg)
-        if use_jump_alias:
-            emit(1, total_steps, f"Connected via jump host — target alias '{jump_alias}'")
+            client, jump_client = connect(host_cfg)
 
         who_out = ""
         uptime_out = ""
@@ -96,7 +115,9 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
         extra_outputs = {}
 
         def _run(cmd):
-            if use_jump_alias:
+            if slurm_cfg and salloc_cmd:
+                return run_command_via_slurm(client, salloc_cmd, setup_cmds, cmd)
+            elif use_jump_alias:
                 return run_command_via_jump(client, jump_alias, cmd)
             return run_command(client, cmd)
 

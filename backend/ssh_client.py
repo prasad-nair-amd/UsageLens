@@ -153,6 +153,24 @@ def run_command_via_jump(jump_client, alias, command, timeout=30):
     return run_command(jump_client, wrapped, timeout=timeout)
 
 
+def run_command_via_slurm(client, salloc_cmd, setup_cmds, command, timeout=120):
+    """Run a command on a Slurm-allocated node.
+
+    Wraps everything into: salloc <cmd> bash -c 'setup1; setup2; <command>'
+    Falls back gracefully if node is busy.
+    """
+    setup_str = "; ".join(c.strip() for c in setup_cmds if c.strip())
+    if setup_str:
+        inner = f"{setup_str}; {command}"
+    else:
+        inner = command
+    wrapped = f"{salloc_cmd} bash -c {_shell_quote(inner)}"
+    exit_code, out, err = run_command(client, wrapped, timeout=timeout)
+    if exit_code != 0 and ("busy" in err.lower() or "unable to allocate" in err.lower()):
+        raise SSHConnectError(f"Slurm node is currently busy (allocated by another user). Try again later.")
+    return exit_code, out, err
+
+
 def test_jump_alias(jump_client, alias, timeout=15):
     """Verify the jump host can reach the target alias by running `ssh <alias> echo ok`."""
     exit_code, out, err = run_command_via_jump(jump_client, alias, "echo ok", timeout=timeout)

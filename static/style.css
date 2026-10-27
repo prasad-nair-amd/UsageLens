@@ -409,15 +409,29 @@ td.mono { font-family: ui-monospace, monospace; }
 }
 
 /* Host profile (Page 2) */
-.host-profile { margin-bottom: 18px; }
-.profile-grid {
+.host-profile { margin-bottom: 0; }
+.profile-card-top {
+  display: flex;
+  gap: 40px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+.profile-card-bottom { margin-bottom: 18px; }
+.profile-identity { display: flex; flex-direction: column; gap: 2px; }
+.profile-name { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; }
+.profile-host { font-size: 15px; font-weight: 500; color: var(--text-secondary); font-family: ui-monospace, monospace; }
+.profile-grid-4 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px 20px;
+}
+@media (max-width: 900px) {
+  .profile-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .profile-card-top { flex-direction: column; gap: 8px; }
 }
 .profile-field { display: flex; flex-direction: column; gap: 2px; }
 .profile-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.profile-value { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.profile-value { font-size: 13px; font-weight: 500; color: var(--text-primary); word-break: break-word; }
 
 /* Ops action bar (Page 2) */
 .ops-actions {
@@ -453,6 +467,21 @@ td.mono { font-family: ui-monospace, monospace; }
   margin-right: 6px;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.form-section {
+  padding: 14px 16px;
+  background: var(--page-plane);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+
+.access-section-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--series-7);
+}
 
 .jump-fields-panel {
   margin: -4px 0 12px;

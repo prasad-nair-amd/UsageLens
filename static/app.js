@@ -88,17 +88,35 @@ function showOpsPage(hostId) {
 }
 
 function renderHostProfile(host) {
-  const jumpInfo = host.jump_enabled && host.jump_hostname
-    ? `via ${escapeHtml(host.jump_hostname)} → ${escapeHtml(host.jump_alias || "?")}`
-    : "None (direct)";
+  const mode = host.access_mode || "direct";
+  let accessInfo = "Direct SSH";
+  if (mode === "jump_host" && host.jump_hostname)
+    accessInfo = `Jump host: ${escapeHtml(host.jump_hostname)} → ${escapeHtml(host.jump_alias || "?")}`;
+  else if (mode === "slurm")
+    accessInfo = `Slurm: ${escapeHtml(host.slurm_salloc_cmd || "no salloc configured")}`;
+
+  const pollSec = host.poll_interval_seconds || 43200;
+  const pollLabel = pollSec >= 3600 ? (pollSec / 3600) + " hour" + (pollSec >= 7200 ? "s" : "") : pollSec + "s";
+  const cmdCount = (host.commands || []).length;
+
   $("hostProfile").innerHTML = `
-    <div class="profile-grid">
-      <div class="profile-field"><span class="profile-label">Name</span><span class="profile-value">${escapeHtml(host.name)}</span></div>
-      <div class="profile-field"><span class="profile-label">Host</span><span class="profile-value">${escapeHtml(host.username)}@${escapeHtml(host.hostname)}:${host.port}</span></div>
-      <div class="profile-field"><span class="profile-label">Auth</span><span class="profile-value">${host.auth_method === "password" ? "Password" : "Identity file"}</span></div>
-      <div class="profile-field"><span class="profile-label">Jump host</span><span class="profile-value">${jumpInfo}</span></div>
-      <div class="profile-field"><span class="profile-label">Commands</span><span class="profile-value">${(host.commands || []).length} configured</span></div>
-      <div class="profile-field"><span class="profile-label">Poll interval</span><span class="profile-value">${host.poll_interval_seconds || 300}s</span></div>
+    <div class="profile-card-top panel">
+      <div class="profile-identity">
+        <span class="profile-label">Name</span>
+        <span class="profile-name">${escapeHtml(host.name)}</span>
+      </div>
+      <div class="profile-identity">
+        <span class="profile-label">Host</span>
+        <span class="profile-host">${escapeHtml(host.username)}@${escapeHtml(host.hostname)}:${host.port}</span>
+      </div>
+    </div>
+    <div class="profile-card-bottom panel">
+      <div class="profile-grid-4">
+        <div class="profile-field"><span class="profile-label">Auth</span><span class="profile-value">${host.auth_method === "password" ? "Password" : "Identity file"}</span></div>
+        <div class="profile-field"><span class="profile-label">Access</span><span class="profile-value">${accessInfo}</span></div>
+        <div class="profile-field"><span class="profile-label">Extra commands</span><span class="profile-value">${cmdCount ? cmdCount + " configured" : "None"}</span></div>
+        <div class="profile-field"><span class="profile-label">Poll interval</span><span class="profile-value">${pollLabel}</span></div>
+      </div>
     </div>
   `;
 }
@@ -145,15 +163,22 @@ function toggleAuthFields() {
   $("passwordFieldWrap").style.display = method === "password" ? "" : "none";
 }
 
-function toggleJumpFields() {
-  $("jumpFieldsWrap").style.display = $("fJumpEnabled").checked ? "" : "none";
-  toggleJumpAuthFields();
+function toggleAccessMode() {
+  const mode = $("fAccessMode").value;
+  $("jumpFieldsWrap").style.display = mode === "jump_host" ? "" : "none";
+  $("slurmFieldsWrap").style.display = mode === "slurm" ? "" : "none";
+  if (mode === "jump_host") toggleJumpAuthFields();
+  if (mode === "slurm") toggleSlurmAuthFields();
 }
 
 function toggleJumpAuthFields() {
   const method = $("fJumpAuthMethod").value;
   $("jumpIdentityWrap").style.display = method === "identity_file" ? "" : "none";
   $("jumpPasswordWrap").style.display = method === "password" ? "" : "none";
+}
+
+function toggleSlurmAuthFields() {
+  // No separate Slurm auth fields — uses main host connection
 }
 
 function resetHostForm() {
@@ -163,11 +188,13 @@ function resetHostForm() {
   $("fJumpPort").value = 22;
   $("fPollInterval").value = "43200";
   $("fCommands").value = DEFAULT_COMMANDS.join("\n");
+  $("fAccessMode").value = "direct";
   $("fJumpAlias").value = "";
-  $("fJumpEnabled").checked = false;
+  $("fSlurmSallocCmd").value = "";
+  $("fSlurmSetupCmds").value = "";
   $("hostFormStatus").style.display = "none";
   toggleAuthFields();
-  toggleJumpFields();
+  toggleAccessMode();
 }
 
 function fillHostForm(host) {
@@ -179,7 +206,7 @@ function fillHostForm(host) {
   $("fAuthMethod").value = host.auth_method;
   $("fIdentityFile").value = host.identity_file || "";
   $("fPassword").value = "";
-  $("fJumpEnabled").checked = !!host.jump_enabled;
+  $("fAccessMode").value = host.access_mode || "direct";
   $("fJumpHostname").value = host.jump_hostname || "";
   $("fJumpPort").value = host.jump_port || 22;
   $("fJumpUsername").value = host.jump_username || "";
@@ -187,10 +214,12 @@ function fillHostForm(host) {
   $("fJumpIdentityFile").value = host.jump_identity_file || "";
   $("fJumpPassword").value = "";
   $("fJumpAlias").value = host.jump_alias || "";
+  $("fSlurmSallocCmd").value = host.slurm_salloc_cmd || "";
+  $("fSlurmSetupCmds").value = (host.slurm_setup_commands || []).join("\n");
   $("fCommands").value = (host.commands && host.commands.length ? host.commands : DEFAULT_COMMANDS).join("\n");
   $("fPollInterval").value = String(host.poll_interval_seconds || 43200);
   toggleAuthFields();
-  toggleJumpFields();
+  toggleAccessMode();
 }
 
 function showFormStatus(msg, ok) {
@@ -219,7 +248,7 @@ $("hostForm").addEventListener("submit", async (e) => {
       auth_method: $("fAuthMethod").value,
       identity_file: $("fIdentityFile").value.trim() || null,
       password: $("fPassword").value || null,
-      jump_enabled: $("fJumpEnabled").checked,
+      access_mode: $("fAccessMode").value,
       jump_hostname: $("fJumpHostname").value.trim() || null,
       jump_port: parseInt($("fJumpPort").value, 10) || 22,
       jump_username: $("fJumpUsername").value.trim() || null,
@@ -227,6 +256,8 @@ $("hostForm").addEventListener("submit", async (e) => {
       jump_identity_file: $("fJumpIdentityFile").value.trim() || null,
       jump_password: $("fJumpPassword").value || null,
       jump_alias: $("fJumpAlias").value.trim() || null,
+      slurm_salloc_cmd: $("fSlurmSallocCmd").value.trim() || null,
+      slurm_setup_commands: $("fSlurmSetupCmds").value.split("\n").map(s => s.trim()).filter(Boolean),
       commands: $("fCommands").value.split("\n").map(s => s.trim()).filter(Boolean),
       poll_interval_seconds: parseInt($("fPollInterval").value, 10) || 300,
       auto_poll_enabled: existing ? existing.auto_poll_enabled : false,
@@ -249,7 +280,7 @@ $("hostForm").addEventListener("submit", async (e) => {
 
 $("resetForm").addEventListener("click", resetHostForm);
 $("fAuthMethod").addEventListener("change", toggleAuthFields);
-$("fJumpEnabled").addEventListener("change", toggleJumpFields);
+$("fAccessMode").addEventListener("change", toggleAccessMode);
 $("fJumpAuthMethod").addEventListener("change", toggleJumpAuthFields);
 $("btnAddHost").addEventListener("click", () => showHostForm(null));
 $("btnCancelForm").addEventListener("click", hideHostForm);
@@ -311,15 +342,18 @@ function renderHostList() {
     const card = document.createElement("div");
     card.className = "host-card";
     const count = snapshotCounts[host.id] || 0;
-    const jumpText = host.jump_enabled && host.jump_hostname
-      ? ` via ${escapeHtml(host.jump_hostname)} → ${escapeHtml(host.jump_alias || "?")}`
-      : "";
+    const hMode = host.access_mode || "direct";
+    let accessText = "";
+    if (hMode === "jump_host" && host.jump_hostname)
+      accessText = ` via ${escapeHtml(host.jump_hostname)} → ${escapeHtml(host.jump_alias || "?")}`;
+    else if (hMode === "slurm" && host.slurm_hostname)
+      accessText = ` via Slurm (${escapeHtml(host.slurm_hostname)})`;
     card.innerHTML = `
       <div class="host-card-top">
         <span class="host-card-name">${escapeHtml(host.name)}</span>
         <span class="host-card-snapshots">${count ? `${count} snapshot${count === 1 ? "" : "s"}` : "no data yet"}</span>
       </div>
-      <div class="host-card-meta">${escapeHtml(host.username)}@${escapeHtml(host.hostname)}:${host.port}${jumpText} · ${host.auth_method === "password" ? "password" : "identity file"} auth
+      <div class="host-card-meta">${escapeHtml(host.username)}@${escapeHtml(host.hostname)}:${host.port}${accessText} · ${host.auth_method === "password" ? "password" : "identity file"} auth
         ${host.auto_poll_enabled ? ' · <span class="autopoll-badge">auto-poll ON</span>' : ""}</div>
       <div class="host-card-actions">
         <button data-action="open" class="btn-primary btn-sm">Open</button>
@@ -346,13 +380,15 @@ async function copyHost(host) {
     username: host.username,
     auth_method: host.auth_method,
     identity_file: host.identity_file || null,
-    jump_enabled: host.jump_enabled || false,
+    access_mode: host.access_mode || "direct",
     jump_hostname: host.jump_hostname || null,
     jump_port: host.jump_port || 22,
     jump_username: host.jump_username || null,
     jump_auth_method: host.jump_auth_method || "identity_file",
     jump_identity_file: host.jump_identity_file || null,
     jump_alias: host.jump_alias || null,
+    slurm_salloc_cmd: host.slurm_salloc_cmd || null,
+    slurm_setup_commands: host.slurm_setup_commands || [],
     commands: host.commands || [],
     poll_interval_seconds: host.poll_interval_seconds || 43200,
     auto_poll_enabled: false,

@@ -1,5 +1,5 @@
 @echo off
-REM UsageLens — Stop the server (Windows)
+REM UsageLens - Stop the server (Windows)
 
 echo Stopping UsageLens server...
 

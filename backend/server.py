@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from . import analytics, storage
 from .collector import collect_and_store, collect_for_host, DEFAULT_COMMANDS
-from .ssh_client import connect, test_jump_alias, SSHConnectError
+from .ssh_client import connect, _connect_direct, run_command, test_jump_alias, SSHConnectError
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -39,7 +39,7 @@ class HostIn(BaseModel):
     identity_file: Optional[str] = None
     identity_passphrase: Optional[str] = None
     password: Optional[str] = None
-    jump_enabled: bool = False
+    access_mode: str = Field("direct", pattern="^(direct|jump_host|slurm)$")
     jump_hostname: Optional[str] = None
     jump_port: int = 22
     jump_username: Optional[str] = None
@@ -47,6 +47,14 @@ class HostIn(BaseModel):
     jump_identity_file: Optional[str] = None
     jump_password: Optional[str] = None
     jump_alias: Optional[str] = None
+    slurm_hostname: Optional[str] = None
+    slurm_port: int = 22
+    slurm_username: Optional[str] = None
+    slurm_auth_method: str = Field("identity_file", pattern="^(identity_file|password)$")
+    slurm_identity_file: Optional[str] = None
+    slurm_password: Optional[str] = None
+    slurm_salloc_cmd: Optional[str] = None
+    slurm_setup_commands: List[str] = Field(default_factory=list)
     commands: List[str] = Field(default_factory=lambda: list(DEFAULT_COMMANDS))
     poll_interval_seconds: int = 300
     auto_poll_enabled: bool = False
@@ -62,8 +70,10 @@ def _public_host(host):
     h.pop("password", None)
     h.pop("identity_passphrase", None)
     h.pop("jump_password", None)
+    h.pop("slurm_password", None)
     h["has_password"] = bool(host.get("password"))
     h["has_jump_password"] = bool(host.get("jump_password"))
+    h["has_slurm_password"] = bool(host.get("slurm_password"))
     return h
 
 
@@ -132,6 +142,8 @@ async def upsert_host(host: HostIn):
                     payload["identity_passphrase"] = existing["identity_passphrase"]
                 if not payload.get("jump_password") and existing.get("jump_password"):
                     payload["jump_password"] = existing["jump_password"]
+                if not payload.get("slurm_password") and existing.get("slurm_password"):
+                    payload["slurm_password"] = existing["slurm_password"]
                 hosts[i] = payload
                 break
         else:
@@ -173,9 +185,19 @@ def _get_host_or_404(host_id):
     raise HTTPException(status_code=404, detail="Host not found")
 
 
+def _effective_access_mode(host_cfg):
+    """Determine access mode, supporting old jump_enabled field."""
+    mode = host_cfg.get("access_mode")
+    if mode and mode != "direct":
+        return mode
+    if host_cfg.get("jump_enabled") and host_cfg.get("jump_hostname"):
+        return "jump_host"
+    return mode or "direct"
+
+
 def _build_jump_cfg(host_cfg):
     """Build a jump host config dict from inline jump_* fields, or None."""
-    if not host_cfg.get("jump_enabled") or not host_cfg.get("jump_hostname"):
+    if _effective_access_mode(host_cfg) != "jump_host" or not host_cfg.get("jump_hostname"):
         return None
     return {
         "hostname": host_cfg["jump_hostname"],
@@ -187,17 +209,53 @@ def _build_jump_cfg(host_cfg):
     }
 
 
+def _build_slurm_cfg(host_cfg):
+    """For Slurm mode, use the main host connection fields as the controller."""
+    if _effective_access_mode(host_cfg) != "slurm":
+        return None
+    return {
+        "hostname": host_cfg["hostname"],
+        "port": host_cfg.get("port") or 22,
+        "username": host_cfg.get("username") or "",
+        "auth_method": host_cfg.get("auth_method") or "identity_file",
+        "identity_file": host_cfg.get("identity_file"),
+        "password": host_cfg.get("password"),
+    }
+
+
 @app.post("/api/hosts/{host_id}/test")
 def test_host(host_id: str):
     host_cfg, hosts = _get_host_or_404(host_id)
-    jump_cfg = _build_jump_cfg(host_cfg)
+    mode = _effective_access_mode(host_cfg)
 
     client = jump_client = None
     try:
-        client, jump_client = connect(host_cfg, jump_host_cfg=jump_cfg)
-        jump_alias = host_cfg.get("jump_alias")
-        if jump_cfg and jump_alias:
-            test_jump_alias(client, jump_alias)
+        if mode == "slurm":
+            slurm_cfg = _build_slurm_cfg(host_cfg)
+            if not slurm_cfg:
+                return {"ok": False, "message": "Slurm controller not configured"}
+            client = _connect_direct(slurm_cfg)
+            salloc_cmd = host_cfg.get("slurm_salloc_cmd", "")
+            if salloc_cmd:
+                # Try with --immediate to avoid hanging if node is busy
+                test_cmd = salloc_cmd.rstrip()
+                if "--immediate" not in test_cmd:
+                    test_cmd += " --immediate"
+                exit_code, out, err = run_command(client, f"{test_cmd} bash -c 'echo SLURM_OK; hostname'", timeout=30)
+                if exit_code != 0 or "SLURM_OK" not in out:
+                    detail = err.strip() or out.strip() or f"exit code {exit_code}"
+                    if "busy" in detail.lower() or "unable to allocate" in detail.lower():
+                        return {"ok": False, "message": f"SSH to controller OK, but the node is currently busy (allocated by another user). Try again later."}
+                    return {"ok": False, "message": f"SSH to controller OK, but salloc failed: {detail}"}
+                node_name = out.replace("SLURM_OK", "").strip().split("\n")[-1].strip()
+                return {"ok": True, "message": f"Connected to Slurm controller and allocated node ({node_name}) successfully"}
+            return {"ok": True, "message": "Connected to Slurm controller"}
+        else:
+            jump_cfg = _build_jump_cfg(host_cfg)
+            client, jump_client = connect(host_cfg, jump_host_cfg=jump_cfg)
+            jump_alias = host_cfg.get("jump_alias")
+            if jump_cfg and jump_alias:
+                test_jump_alias(client, jump_alias)
         return {"ok": True, "message": "Connected successfully"}
     except SSHConnectError as exc:
         return {"ok": False, "message": str(exc)}

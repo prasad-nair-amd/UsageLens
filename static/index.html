@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UsageLens — System Usage Dashboard</title>
-<link rel="stylesheet" href="/style.css?v=25">
+<link rel="stylesheet" href="/style.css?v=30">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -35,28 +35,41 @@
       </div>
       <form id="hostForm" class="host-form">
         <input type="hidden" id="hostId" value="">
-        <div class="field-row">
-          <label>Name<input id="fName" required placeholder="customer-box-1"></label>
-          <label>Hostname / IP<input id="fHostname" required placeholder="10.194.183.166"></label>
-          <label class="narrow">Port<input id="fPort" type="number" value="22"></label>
+        <div class="form-section">
+          <h4 class="access-section-title">Host Identity</h4>
+          <div class="field-row">
+            <label>Name<input id="fName" required placeholder="customer-box-1"></label>
+            <label>Hostname / IP<input id="fHostname" required placeholder="aac11.amd.com"></label>
+          </div>
+        </div>
+        <div class="form-section">
+          <h4 class="access-section-title">SSH Connection</h4>
+          <div class="field-row">
+            <label class="narrow">Port<input id="fPort" type="number" value="22"></label>
+            <label>Username<input id="fUsername" required placeholder="prasad_nair_97l"></label>
+            <label>Auth method
+              <select id="fAuthMethod">
+                <option value="identity_file">Identity file</option>
+                <option value="password">Password</option>
+              </select>
+            </label>
+          </div>
+          <div class="field-row">
+            <label id="identityFieldWrap">Identity file path<input id="fIdentityFile" placeholder="C:\path\to\key"></label>
+            <label id="passwordFieldWrap" style="display:none">Password<input id="fPassword" type="password" placeholder="(leave blank to keep existing)"></label>
+          </div>
         </div>
         <div class="field-row">
-          <label>Username<input id="fUsername" required placeholder="prasnair"></label>
-          <label>Auth method
-            <select id="fAuthMethod">
-              <option value="identity_file">Identity file</option>
-              <option value="password">Password</option>
+          <label>Access mode
+            <select id="fAccessMode">
+              <option value="direct">Direct SSH</option>
+              <option value="jump_host">Via Jump Host</option>
+              <option value="slurm">Via Slurm</option>
             </select>
           </label>
         </div>
-        <div class="field-row">
-          <label id="identityFieldWrap">Identity file path<input id="fIdentityFile" placeholder="C:\path\to\key"></label>
-          <label id="passwordFieldWrap" style="display:none">Password<input id="fPassword" type="password" placeholder="(leave blank to keep existing)"></label>
-        </div>
-        <div class="field-row">
-          <label class="checkbox-label"><input type="checkbox" id="fJumpEnabled"> Connect via jump host</label>
-        </div>
         <div id="jumpFieldsWrap" style="display:none" class="jump-fields-panel">
+          <h4 class="access-section-title">Jump Host Connection</h4>
           <div class="field-row">
             <label>Jump host hostname / IP<input id="fJumpHostname" placeholder="45.76.28.198"></label>
             <label class="narrow">Port<input id="fJumpPort" type="number" value="22"></label>
@@ -73,7 +86,19 @@
             <label id="jumpPasswordWrap" style="display:none">Jump host password<input id="fJumpPassword" type="password" placeholder="(leave blank to keep existing)"></label>
           </div>
           <div class="field-row">
-            <label>Target alias (SSH command from jump host to reach this device)<input id="fJumpAlias" placeholder="e.g. gpu-3"></label>
+            <label>Target alias (SSH command from jump host)<input id="fJumpAlias" placeholder="e.g. gpu-3"></label>
+          </div>
+        </div>
+        <div id="slurmFieldsWrap" style="display:none" class="jump-fields-panel">
+          <h4 class="access-section-title">Slurm Allocation</h4>
+          <p class="hint" style="margin:-4px 0 10px">The host connection above will be used to SSH into the Slurm controller. Configure the allocation command and setup below.</p>
+          <div class="field-row">
+            <label class="full">salloc command (to allocate the node)<input id="fSlurmSallocCmd" placeholder="salloc --reservation=aac11_gpu-31_reservation --exclusive --account=tcr --mem=0"></label>
+          </div>
+          <div class="field-row">
+            <label class="full">Setup commands (run after allocation, before data collection — one per line)
+              <textarea id="fSlurmSetupCmds" rows="2" placeholder="e.g. module load rocm"></textarea>
+            </label>
           </div>
         </div>
         <div class="field-row">
@@ -123,7 +148,7 @@
   <section id="pageOps" style="display:none">
     <button type="button" id="btnBack" class="btn-back">&larr; Back to hosts</button>
 
-    <div class="panel host-profile" id="hostProfile"></div>
+    <div class="host-profile" id="hostProfile"></div>
 
     <div class="ops-actions" id="opsActions">
       <button type="button" id="btnTest" class="btn-ghost">Test connection</button>
@@ -237,6 +262,6 @@
   </section>
 </main>
 
-<script src="/app.js?v=25"></script>
+<script src="/app.js?v=30"></script>
 </body>
 </html>
