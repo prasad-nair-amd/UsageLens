@@ -206,7 +206,9 @@ function fillHostForm(host) {
   $("fAuthMethod").value = host.auth_method;
   $("fIdentityFile").value = host.identity_file || "";
   $("fPassword").value = "";
-  $("fAccessMode").value = host.access_mode || "direct";
+  let editMode = host.access_mode || "direct";
+  if (editMode === "direct" && host.jump_enabled && host.jump_hostname) editMode = "jump_host";
+  $("fAccessMode").value = editMode;
   $("fJumpHostname").value = host.jump_hostname || "";
   $("fJumpPort").value = host.jump_port || 22;
   $("fJumpUsername").value = host.jump_username || "";

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UsageLens — System Usage Dashboard</title>
-<link rel="stylesheet" href="/style.css?v=30">
+<link rel="stylesheet" href="/style.css?v=33">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -184,12 +184,14 @@
           </div>
           <div class="chart-scroll"><canvas id="snapSessionsChart"></canvas></div>
         </div>
-        <div class="table-card">
-          <div class="chart-card-header"><h3>Login history</h3><span class="muted-note">From `last` command — recent logins, logouts, and session duration</span></div>
-          <table id="snapUserTable">
-            <thead><tr><th>User</th><th>Login</th><th>Logout</th><th>Duration</th><th>Source</th></tr></thead>
-            <tbody></tbody>
-          </table>
+        <div class="raw-card">
+          <details>
+            <summary>Login history <span class="muted-note" style="margin-left:8px">From `last` command — recent logins, logouts, and session duration</span></summary>
+            <table id="snapUserTable" style="margin-top:12px">
+              <thead><tr><th>User</th><th>Login</th><th>Logout</th><th>Duration</th><th>Source</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </details>
         </div>
         <div class="raw-card">
           <details>
@@ -262,6 +264,6 @@
   </section>
 </main>
 
-<script src="/app.js?v=30"></script>
+<script src="/app.js?v=33"></script>
 </body>
 </html>

@@ -1,14 +1,18 @@
-"""Load/save helpers for the YAML-backed data files, with file locking so the
-web server and a headless `collector.py --all` cron run can't corrupt each other."""
+"""Load/save helpers for data files, with file locking so the
+web server and a headless `collector.py --all` cron run can't corrupt each other.
 
+Usage data is stored as JSON (fast parsing). Host config stays YAML (small, human-editable).
+"""
+
+import json
 import os
-import re
 import yaml
 from filelock import FileLock
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 HOSTS_FILE = os.path.join(DATA_DIR, "hosts.yaml")
-USAGE_FILE = os.path.join(DATA_DIR, "usage_data.yaml")
+USAGE_FILE = os.path.join(DATA_DIR, "usage_data.json")
+USAGE_FILE_YAML = os.path.join(DATA_DIR, "usage_data.yaml")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -17,7 +21,9 @@ def _lock_for(path):
     return FileLock(path + ".lock")
 
 
-def _load(path, default):
+# ========== Hosts (YAML — small, human-editable) ==========
+
+def _load_yaml(path, default):
     if not os.path.exists(path):
         return default
     with open(path, "r", encoding="utf-8") as f:
@@ -25,7 +31,7 @@ def _load(path, default):
     return data if data is not None else default
 
 
-def _save(path, data):
+def _save_yaml(path, data):
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
@@ -34,75 +40,72 @@ def _save(path, data):
 
 def load_hosts():
     with _lock_for(HOSTS_FILE):
-        return _load(HOSTS_FILE, {"hosts": []})
+        return _load_yaml(HOSTS_FILE, {"hosts": []})
 
 
 def save_hosts(data):
     with _lock_for(HOSTS_FILE):
-        _save(HOSTS_FILE, data)
+        _save_yaml(HOSTS_FILE, data)
+
+
+# ========== Usage data (JSON — fast parsing) ==========
+
+def _migrate_yaml_to_json():
+    """One-time migration: convert usage_data.yaml to usage_data.json."""
+    if os.path.exists(USAGE_FILE_YAML) and not os.path.exists(USAGE_FILE):
+        try:
+            with open(USAGE_FILE_YAML, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            if data and "snapshots" in data:
+                with open(USAGE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False)
+                os.rename(USAGE_FILE_YAML, USAGE_FILE_YAML + ".bak")
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def load_usage():
     with _lock_for(USAGE_FILE):
-        return _load(USAGE_FILE, {"snapshots": []})
+        _migrate_yaml_to_json()
+        if not os.path.exists(USAGE_FILE):
+            return {"snapshots": []}
+        with open(USAGE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if data else {"snapshots": []}
 
 
 def save_usage(data):
     with _lock_for(USAGE_FILE):
-        _save(USAGE_FILE, data)
+        tmp_path = USAGE_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, USAGE_FILE)
 
 
 def append_snapshot(snapshot):
-    """Append a snapshot by writing directly to end of file — avoids loading the full YAML."""
+    """Append a snapshot to the JSON file."""
     with _lock_for(USAGE_FILE):
-        if not os.path.exists(USAGE_FILE):
-            with open(USAGE_FILE, "w", encoding="utf-8") as f:
-                f.write("snapshots:\n")
-        item_yaml = yaml.safe_dump([snapshot], sort_keys=False, allow_unicode=True)
-        with open(USAGE_FILE, "a", encoding="utf-8") as f:
-            f.write(item_yaml)
+        _migrate_yaml_to_json()
+        if os.path.exists(USAGE_FILE):
+            with open(USAGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {"snapshots": []}
+        data["snapshots"].append(snapshot)
+        tmp_path = USAGE_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, USAGE_FILE)
     return snapshot
 
 
-def delete_all_snapshots_for_host(host_id):
-    """Remove all snapshots for a given host."""
-    with _lock_for(USAGE_FILE):
-        data = _load(USAGE_FILE, {"snapshots": []})
-        before = len(data["snapshots"])
-        data["snapshots"] = [s for s in data["snapshots"] if s.get("host_id") != host_id]
-        removed = before - len(data["snapshots"])
-        if removed:
-            _save(USAGE_FILE, data)
-        return removed
-
-
-def delete_snapshot(host_id, collected_at):
-    """Remove a single snapshot identified by host_id + collected_at."""
-    with _lock_for(USAGE_FILE):
-        data = _load(USAGE_FILE, {"snapshots": []})
-        before = len(data["snapshots"])
-        data["snapshots"] = [
-            s for s in data["snapshots"]
-            if not (s.get("host_id") == host_id and s.get("collected_at") == collected_at)
-        ]
-        if len(data["snapshots"]) < before:
-            _save(USAGE_FILE, data)
-            return True
-        return False
-
-
-_HOST_ID_RE = re.compile(r"^\s*host_id:\s*(.+)$")
-
 def snapshot_counts():
-    """Count snapshots per host by scanning for host_id lines — much faster than full YAML parse."""
+    """Count snapshots per host — fast with JSON."""
+    data = load_usage()
     counts = {}
-    if not os.path.exists(USAGE_FILE):
-        return counts
-    with _lock_for(USAGE_FILE):
-        with open(USAGE_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                m = _HOST_ID_RE.match(line)
-                if m:
-                    hid = m.group(1).strip().strip("'\"")
-                    counts[hid] = counts.get(hid, 0) + 1
+    for s in data.get("snapshots", []):
+        hid = s.get("host_id", "")
+        counts[hid] = counts.get(hid, 0) + 1
     return counts
