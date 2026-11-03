@@ -241,14 +241,21 @@ def test_host(host_id: str):
                 test_cmd = salloc_cmd.rstrip()
                 if "--immediate" not in test_cmd:
                     test_cmd += " --immediate"
-                exit_code, out, err = run_command(client, f"{test_cmd} bash -c 'echo SLURM_OK; hostname'", timeout=30)
+                exit_code, out, err = run_command(client, f"{test_cmd} srun bash -lc 'echo SLURM_OK; hostname'", timeout=30)
                 if exit_code != 0 or "SLURM_OK" not in out:
                     detail = err.strip() or out.strip() or f"exit code {exit_code}"
-                    if "busy" in detail.lower() or "unable to allocate" in detail.lower():
-                        return {"ok": False, "message": f"SSH to controller OK, but the node is currently busy (allocated by another user). Try again later."}
-                    return {"ok": False, "message": f"SSH to controller OK, but salloc failed: {detail}"}
+                    dl = detail.lower()
+                    if "busy" in dl or "unable to allocate" in dl:
+                        return {"ok": False, "message": "SSH to controller OK. Node is currently busy (allocated by another user). Try again later."}
+                    if "invalid reservation" in dl or "reservation not found" in dl:
+                        return {"ok": False, "message": f"SSH to controller OK. Reservation not found or expired. Check salloc command. ({detail})"}
+                    if "invalid account" in dl:
+                        return {"ok": False, "message": f"SSH to controller OK. Invalid account in salloc command. ({detail})"}
+                    if "permission denied" in dl:
+                        return {"ok": False, "message": f"SSH to controller OK. Permission denied for this reservation. ({detail})"}
+                    return {"ok": False, "message": f"SSH to controller OK. Slurm allocation failed: {detail}"}
                 node_name = out.replace("SLURM_OK", "").strip().split("\n")[-1].strip()
-                return {"ok": True, "message": f"Connected to Slurm controller and allocated node ({node_name}) successfully"}
+                return {"ok": True, "message": f"Connected to controller and ran on node ({node_name}) successfully. Allocation released."}
             return {"ok": True, "message": "Connected to Slurm controller"}
         else:
             jump_cfg = _build_jump_cfg(host_cfg)

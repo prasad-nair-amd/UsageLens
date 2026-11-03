@@ -158,10 +158,14 @@ _LAST_STILL_RE = re.compile(
 
 
 def _parse_last_datetime(s, ref_year):
-    """Parse 'Wed Oct  7 18:52' with a reference year."""
+    """Parse 'Wed Oct  7 18:52' with a reference year.
+    If the result is in the future, assume it was from the previous year."""
     try:
         parsed = dt.datetime.strptime(s.strip(), "%a %b %d %H:%M")
-        return parsed.replace(year=ref_year)
+        result = parsed.replace(year=ref_year)
+        if result > dt.datetime.now() + dt.timedelta(days=1):
+            result = result.replace(year=ref_year - 1)
+        return result
     except ValueError:
         return None
 

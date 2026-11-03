@@ -153,22 +153,70 @@ def run_command_via_jump(jump_client, alias, command, timeout=30):
     return run_command(jump_client, wrapped, timeout=timeout)
 
 
-def run_command_via_slurm(client, salloc_cmd, setup_cmds, command, timeout=120):
-    """Run a command on a Slurm-allocated node.
+def run_slurm_batch(client, salloc_cmd, setup_cmds, commands, timeout=120):
+    """Run multiple commands on a Slurm-allocated node in a single allocation.
 
-    Wraps everything into: salloc <cmd> bash -c 'setup1; setup2; <command>'
-    Falls back gracefully if node is busy.
+    Uses srun to execute on the allocated node (not the controller).
+    The allocation is automatically released when srun completes.
+    Returns (results_dict, node_name, exit_code, stderr).
     """
+    parts = []
+    parts.append("echo __USAGELENS_NODE__")
+    parts.append("hostname")
+    for i, cmd in enumerate(commands):
+        parts.append(f"echo __USAGELENS_CMD_{i}__")
+        parts.append(cmd)
+    parts.append("echo __USAGELENS_END__")
+
     setup_str = "; ".join(c.strip() for c in setup_cmds if c.strip())
     if setup_str:
-        inner = f"{setup_str}; {command}"
+        inner = setup_str + "; " + "; ".join(parts)
     else:
-        inner = command
-    wrapped = f"{salloc_cmd} bash -c {_shell_quote(inner)}"
+        inner = "; ".join(parts)
+
+    wrapped = f"{salloc_cmd} srun bash -lc {_shell_quote(inner)}"
     exit_code, out, err = run_command(client, wrapped, timeout=timeout)
-    if exit_code != 0 and ("busy" in err.lower() or "unable to allocate" in err.lower()):
-        raise SSHConnectError(f"Slurm node is currently busy (allocated by another user). Try again later.")
-    return exit_code, out, err
+
+    # Filter out Slurm's own messages from stdout (they start with salloc:/srun:)
+    filtered_lines = [line for line in out.splitlines() if not line.startswith(("salloc:", "srun:"))]
+    out = "\n".join(filtered_lines)
+
+    err_lower = err.lower()
+    if exit_code != 0:
+        if "busy" in err_lower or "unable to allocate" in err_lower:
+            raise SSHConnectError("Slurm allocation failed: node is currently busy (allocated by another user). Try again later.")
+        if "invalid reservation" in err_lower or "reservation not found" in err_lower:
+            raise SSHConnectError(f"Slurm allocation failed: reservation not found or expired. Detail: {err.strip()}")
+        if "invalid account" in err_lower:
+            raise SSHConnectError(f"Slurm allocation failed: invalid account. Detail: {err.strip()}")
+        if "permission denied" in err_lower:
+            raise SSHConnectError(f"Slurm allocation failed: permission denied. Detail: {err.strip()}")
+        if "__USAGELENS_NODE__" not in out:
+            raise SSHConnectError(f"Slurm salloc/srun failed (exit {exit_code}). Detail: {err.strip() or out.strip()[:300]}")
+
+    # Extract node name
+    node_name = ""
+    node_start = out.find("__USAGELENS_NODE__")
+    if node_start != -1:
+        node_section = out[node_start + len("__USAGELENS_NODE__"):out.find("__USAGELENS_CMD_0__")].strip()
+        node_name = node_section.splitlines()[0].strip() if node_section else ""
+
+    # Parse each command's output
+    results = {}
+    for i, cmd in enumerate(commands):
+        marker = f"__USAGELENS_CMD_{i}__"
+        next_marker = f"__USAGELENS_CMD_{i+1}__" if i + 1 < len(commands) else "__USAGELENS_END__"
+        start = out.find(marker)
+        if start == -1:
+            results[cmd] = ""
+            continue
+        start += len(marker) + 1
+        end = out.find(next_marker, start)
+        if end == -1:
+            end = len(out)
+        results[cmd] = out[start:end].strip()
+
+    return results, node_name, exit_code, err, out
 
 
 def test_jump_alias(jump_client, alias, timeout=15):

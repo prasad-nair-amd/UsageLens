@@ -13,7 +13,7 @@ import datetime as dt
 import sys
 
 from . import storage
-from .ssh_client import connect, _connect_direct, run_command, run_command_via_jump, run_command_via_slurm, SSHConnectError
+from .ssh_client import connect, _connect_direct, run_command, run_command_via_jump, run_slurm_batch, SSHConnectError
 
 WHO_COMMAND = "who"
 UPTIME_COMMAND = "uptime"
@@ -114,27 +114,47 @@ def collect_for_host(host_cfg, all_hosts, on_progress=None):
         gpu_raw = ""
         extra_outputs = {}
 
-        def _run(cmd):
-            if slurm_cfg and salloc_cmd:
-                return run_command_via_slurm(client, salloc_cmd, setup_cmds, cmd)
-            elif use_jump_alias:
-                return run_command_via_jump(client, jump_alias, cmd)
-            return run_command(client, cmd)
+        if slurm_cfg and salloc_cmd:
+            emit(2, total_steps, f"Allocating node via salloc+srun and running {len(all_commands)} commands…")
+            results, node_name, exit_code, err, raw_out = run_slurm_batch(client, salloc_cmd, setup_cmds, all_commands)
+            emit(2, total_steps, f"salloc succeeded — running on node: {node_name or 'unknown'}")
+            for cmd in all_commands:
+                out = results.get(cmd, "")
+                if cmd.strip() == WHO_COMMAND:
+                    who_out = out
+                elif cmd.strip() == UPTIME_COMMAND:
+                    uptime_out = out
+                elif cmd.strip().startswith("last"):
+                    last_out = out
+                elif cmd.strip() == ROCM_SMI_COMMAND:
+                    gpu_raw = out if "NO_GPU" not in out else ""
+                else:
+                    if out:
+                        extra_outputs[cmd] = out
+            extra_outputs["Slurm node"] = node_name or "unknown"
+            if err.strip():
+                extra_outputs["Slurm stderr"] = err.strip()
+            emit(total_steps - 1, total_steps, f"All commands complete on node {node_name}. Allocation released.")
+        else:
+            def _run(cmd):
+                if use_jump_alias:
+                    return run_command_via_jump(client, jump_alias, cmd)
+                return run_command(client, cmd)
 
-        for i, cmd in enumerate(all_commands):
-            step = 2 + i
-            emit(step, total_steps, f"Running {i + 1}/{len(all_commands)}: {_cmd_label(cmd)}")
-            exit_code, out, err = _run(cmd)
-            if cmd.strip() == WHO_COMMAND:
-                who_out = out
-            elif cmd.strip() == UPTIME_COMMAND:
-                uptime_out = out
-            elif cmd.strip().startswith("last"):
-                last_out = out
-            elif cmd.strip() == ROCM_SMI_COMMAND:
-                gpu_raw = out if "NO_GPU" not in out else ""
-            else:
-                extra_outputs[cmd] = out if exit_code == 0 else f"[exit {exit_code}] {out}{err}"
+            for i, cmd in enumerate(all_commands):
+                step = 2 + i
+                emit(step, total_steps, f"Running {i + 1}/{len(all_commands)}: {_cmd_label(cmd)}")
+                exit_code, out, err = _run(cmd)
+                if cmd.strip() == WHO_COMMAND:
+                    who_out = out
+                elif cmd.strip() == UPTIME_COMMAND:
+                    uptime_out = out
+                elif cmd.strip().startswith("last"):
+                    last_out = out
+                elif cmd.strip() == ROCM_SMI_COMMAND:
+                    gpu_raw = out if "NO_GPU" not in out else ""
+                else:
+                    extra_outputs[cmd] = out if exit_code == 0 else f"[exit {exit_code}] {out}{err}"
 
         emit(total_steps, total_steps, "Saving snapshot…")
 

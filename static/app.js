@@ -165,6 +165,7 @@ function toggleAuthFields() {
 
 function toggleAccessMode() {
   const mode = $("fAccessMode").value;
+  $("directFieldsWrap").style.display = mode === "direct" ? "" : "none";
   $("jumpFieldsWrap").style.display = mode === "jump_host" ? "" : "none";
   $("slurmFieldsWrap").style.display = mode === "slurm" ? "" : "none";
   if (mode === "jump_host") toggleJumpAuthFields();
@@ -178,7 +179,9 @@ function toggleJumpAuthFields() {
 }
 
 function toggleSlurmAuthFields() {
-  // No separate Slurm auth fields — uses main host connection
+  const method = $("fSlurmCtrlAuth").value;
+  $("slurmIdentityWrap").style.display = method === "identity_file" ? "" : "none";
+  $("slurmPasswordWrap").style.display = method === "password" ? "" : "none";
 }
 
 function resetHostForm() {
@@ -186,6 +189,7 @@ function resetHostForm() {
   $("hostId").value = "";
   $("fPort").value = 22;
   $("fJumpPort").value = 22;
+  $("fSlurmCtrlPort").value = 22;
   $("fPollInterval").value = "43200";
   $("fCommands").value = DEFAULT_COMMANDS.join("\n");
   $("fAccessMode").value = "direct";
@@ -200,15 +204,19 @@ function resetHostForm() {
 function fillHostForm(host) {
   $("hostId").value = host.id;
   $("fName").value = host.name;
-  $("fHostname").value = host.hostname;
-  $("fPort").value = host.port;
-  $("fUsername").value = host.username;
-  $("fAuthMethod").value = host.auth_method;
-  $("fIdentityFile").value = host.identity_file || "";
-  $("fPassword").value = "";
   let editMode = host.access_mode || "direct";
   if (editMode === "direct" && host.jump_enabled && host.jump_hostname) editMode = "jump_host";
   $("fAccessMode").value = editMode;
+
+  // Direct SSH fields
+  $("fHostname").value = host.hostname || "";
+  $("fPort").value = host.port || 22;
+  $("fUsername").value = host.username || "";
+  $("fAuthMethod").value = host.auth_method || "identity_file";
+  $("fIdentityFile").value = host.identity_file || "";
+  $("fPassword").value = "";
+
+  // Jump host fields
   $("fJumpHostname").value = host.jump_hostname || "";
   $("fJumpPort").value = host.jump_port || 22;
   $("fJumpUsername").value = host.jump_username || "";
@@ -216,8 +224,17 @@ function fillHostForm(host) {
   $("fJumpIdentityFile").value = host.jump_identity_file || "";
   $("fJumpPassword").value = "";
   $("fJumpAlias").value = host.jump_alias || "";
+
+  // Slurm fields — controller uses main host fields for backward compat
+  $("fSlurmCtrlHost").value = host.hostname || "";
+  $("fSlurmCtrlPort").value = host.port || 22;
+  $("fSlurmCtrlUser").value = host.username || "";
+  $("fSlurmCtrlAuth").value = host.auth_method || "identity_file";
+  $("fSlurmCtrlIdentity").value = host.identity_file || "";
+  $("fSlurmCtrlPassword").value = "";
   $("fSlurmSallocCmd").value = host.slurm_salloc_cmd || "";
   $("fSlurmSetupCmds").value = (host.slurm_setup_commands || []).join("\n");
+
   $("fCommands").value = (host.commands && host.commands.length ? host.commands : DEFAULT_COMMANDS).join("\n");
   $("fPollInterval").value = String(host.poll_interval_seconds || 43200);
   toggleAuthFields();
@@ -241,16 +258,25 @@ $("hostForm").addEventListener("submit", async (e) => {
   $("hostFormStatus").style.display = "none";
   try {
     const existing = hosts.find(h => h.id === $("hostId").value);
+    const mode = $("fAccessMode").value;
+    // For Slurm, the main host fields come from the controller inputs
+    const hostHost = mode === "slurm" ? $("fSlurmCtrlHost").value.trim() : $("fHostname").value.trim();
+    const hostPort = mode === "slurm" ? parseInt($("fSlurmCtrlPort").value, 10) || 22 : parseInt($("fPort").value, 10) || 22;
+    const hostUser = mode === "slurm" ? $("fSlurmCtrlUser").value.trim() : $("fUsername").value.trim();
+    const hostAuth = mode === "slurm" ? $("fSlurmCtrlAuth").value : $("fAuthMethod").value;
+    const hostKey = mode === "slurm" ? ($("fSlurmCtrlIdentity").value.trim() || null) : ($("fIdentityFile").value.trim() || null);
+    const hostPwd = mode === "slurm" ? ($("fSlurmCtrlPassword").value || null) : ($("fPassword").value || null);
+
     const payload = {
       id: $("hostId").value || null,
       name: $("fName").value.trim(),
-      hostname: $("fHostname").value.trim(),
-      port: parseInt($("fPort").value, 10) || 22,
-      username: $("fUsername").value.trim(),
-      auth_method: $("fAuthMethod").value,
-      identity_file: $("fIdentityFile").value.trim() || null,
-      password: $("fPassword").value || null,
-      access_mode: $("fAccessMode").value,
+      hostname: hostHost,
+      port: hostPort,
+      username: hostUser,
+      auth_method: hostAuth,
+      identity_file: hostKey,
+      password: hostPwd,
+      access_mode: mode,
       jump_hostname: $("fJumpHostname").value.trim() || null,
       jump_port: parseInt($("fJumpPort").value, 10) || 22,
       jump_username: $("fJumpUsername").value.trim() || null,
@@ -284,6 +310,7 @@ $("resetForm").addEventListener("click", resetHostForm);
 $("fAuthMethod").addEventListener("change", toggleAuthFields);
 $("fAccessMode").addEventListener("change", toggleAccessMode);
 $("fJumpAuthMethod").addEventListener("change", toggleJumpAuthFields);
+$("fSlurmCtrlAuth").addEventListener("change", toggleSlurmAuthFields);
 $("btnAddHost").addEventListener("click", () => showHostForm(null));
 $("btnCancelForm").addEventListener("click", hideHostForm);
 

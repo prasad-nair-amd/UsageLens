@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UsageLens — System Usage Dashboard</title>
-<link rel="stylesheet" href="/style.css?v=33">
+<link rel="stylesheet" href="/style.css?v=35">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -35,70 +35,99 @@
       </div>
       <form id="hostForm" class="host-form">
         <input type="hidden" id="hostId" value="">
+
         <div class="form-section">
-          <h4 class="access-section-title">Host Identity</h4>
           <div class="field-row">
-            <label>Name<input id="fName" required placeholder="customer-box-1"></label>
-            <label>Hostname / IP<input id="fHostname" required placeholder="aac11.amd.com"></label>
+            <label>Name<input id="fName" required placeholder="e.g. GPU-3 Foundation"></label>
+            <label>Access mode
+              <select id="fAccessMode">
+                <option value="direct">Direct SSH</option>
+                <option value="jump_host">Via Jump Host</option>
+                <option value="slurm">Via Slurm</option>
+              </select>
+            </label>
           </div>
         </div>
-        <div class="form-section">
-          <h4 class="access-section-title">SSH Connection</h4>
+
+        <!-- DIRECT SSH: connect straight to the target -->
+        <div id="directFieldsWrap" class="form-section">
+          <h4 class="access-section-title">SSH to Target Device</h4>
           <div class="field-row">
+            <label>Hostname / IP<input id="fHostname" required placeholder="10.194.183.166"></label>
             <label class="narrow">Port<input id="fPort" type="number" value="22"></label>
-            <label>Username<input id="fUsername" required placeholder="prasad_nair_97l"></label>
+            <label>Username<input id="fUsername" required placeholder="amd"></label>
+          </div>
+          <div class="field-row">
             <label>Auth method
               <select id="fAuthMethod">
                 <option value="identity_file">Identity file</option>
                 <option value="password">Password</option>
               </select>
             </label>
-          </div>
-          <div class="field-row">
             <label id="identityFieldWrap">Identity file path<input id="fIdentityFile" placeholder="C:\path\to\key"></label>
             <label id="passwordFieldWrap" style="display:none">Password<input id="fPassword" type="password" placeholder="(leave blank to keep existing)"></label>
           </div>
         </div>
-        <div class="field-row">
-          <label>Access mode
-            <select id="fAccessMode">
-              <option value="direct">Direct SSH</option>
-              <option value="jump_host">Via Jump Host</option>
-              <option value="slurm">Via Slurm</option>
-            </select>
-          </label>
-        </div>
-        <div id="jumpFieldsWrap" style="display:none" class="jump-fields-panel">
-          <h4 class="access-section-title">Jump Host Connection</h4>
-          <div class="field-row">
-            <label>Jump host hostname / IP<input id="fJumpHostname" placeholder="45.76.28.198"></label>
-            <label class="narrow">Port<input id="fJumpPort" type="number" value="22"></label>
-            <label>Username<input id="fJumpUsername" placeholder="amd"></label>
+
+        <!-- JUMP HOST: SSH to jump host, then ssh alias to target -->
+        <div id="jumpFieldsWrap" style="display:none">
+          <div class="form-section">
+            <h4 class="access-section-title">SSH to Jump Host</h4>
+            <div class="field-row">
+              <label>Jump host hostname / IP<input id="fJumpHostname" placeholder="45.76.28.198"></label>
+              <label class="narrow">Port<input id="fJumpPort" type="number" value="22"></label>
+              <label>Username<input id="fJumpUsername" placeholder="amd"></label>
+            </div>
+            <div class="field-row">
+              <label>Auth method
+                <select id="fJumpAuthMethod">
+                  <option value="identity_file">Identity file</option>
+                  <option value="password">Password</option>
+                </select>
+              </label>
+              <label id="jumpIdentityWrap">Identity file<input id="fJumpIdentityFile" placeholder="C:\path\to\key"></label>
+              <label id="jumpPasswordWrap" style="display:none">Password<input id="fJumpPassword" type="password" placeholder="(leave blank to keep existing)"></label>
+            </div>
           </div>
-          <div class="field-row">
-            <label>Jump host auth method
-              <select id="fJumpAuthMethod">
-                <option value="identity_file">Identity file</option>
-                <option value="password">Password</option>
-              </select>
-            </label>
-            <label id="jumpIdentityWrap">Jump host identity file<input id="fJumpIdentityFile" placeholder="C:\path\to\key"></label>
-            <label id="jumpPasswordWrap" style="display:none">Jump host password<input id="fJumpPassword" type="password" placeholder="(leave blank to keep existing)"></label>
-          </div>
-          <div class="field-row">
-            <label>Target alias (SSH command from jump host)<input id="fJumpAlias" placeholder="e.g. gpu-3"></label>
+          <div class="form-section">
+            <h4 class="access-section-title">Target Device (from Jump Host)</h4>
+            <div class="field-row">
+              <label>SSH alias to reach target from the jump host<input id="fJumpAlias" placeholder="e.g. gpu-3 (the command you run on the jump host)"></label>
+            </div>
           </div>
         </div>
-        <div id="slurmFieldsWrap" style="display:none" class="jump-fields-panel">
-          <h4 class="access-section-title">Slurm Allocation</h4>
-          <p class="hint" style="margin:-4px 0 10px">The host connection above will be used to SSH into the Slurm controller. Configure the allocation command and setup below.</p>
-          <div class="field-row">
-            <label class="full">salloc command (to allocate the node)<input id="fSlurmSallocCmd" placeholder="salloc --reservation=aac11_gpu-31_reservation --exclusive --account=tcr --mem=0"></label>
+
+        <!-- SLURM: SSH to controller, then salloc+srun -->
+        <div id="slurmFieldsWrap" style="display:none">
+          <div class="form-section">
+            <h4 class="access-section-title">SSH to Slurm Controller</h4>
+            <p class="hint" style="margin:-4px 0 8px">The system you SSH into to run salloc</p>
+            <div class="field-row">
+              <label>Controller hostname / IP<input id="fSlurmCtrlHost" placeholder="aac11.amd.com"></label>
+              <label class="narrow">Port<input id="fSlurmCtrlPort" type="number" value="22"></label>
+              <label>Username<input id="fSlurmCtrlUser" placeholder="prasad_nair_97l"></label>
+            </div>
+            <div class="field-row">
+              <label>Auth method
+                <select id="fSlurmCtrlAuth">
+                  <option value="identity_file">Identity file</option>
+                  <option value="password">Password</option>
+                </select>
+              </label>
+              <label id="slurmIdentityWrap">Identity file<input id="fSlurmCtrlIdentity" placeholder="C:\path\to\key"></label>
+              <label id="slurmPasswordWrap" style="display:none">Password<input id="fSlurmCtrlPassword" type="password" placeholder="(leave blank to keep existing)"></label>
+            </div>
           </div>
-          <div class="field-row">
-            <label class="full">Setup commands (run after allocation, before data collection — one per line)
-              <textarea id="fSlurmSetupCmds" rows="2" placeholder="e.g. module load rocm"></textarea>
-            </label>
+          <div class="form-section">
+            <h4 class="access-section-title">Slurm Allocation</h4>
+            <div class="field-row">
+              <label class="full">salloc command<input id="fSlurmSallocCmd" placeholder="salloc --reservation=aac11_gpu-31_reservation --exclusive --account=tcr --mem=0"></label>
+            </div>
+            <div class="field-row">
+              <label class="full">Setup commands after allocation (one per line)
+                <textarea id="fSlurmSetupCmds" rows="2" placeholder="e.g. module load rocm"></textarea>
+              </label>
+            </div>
           </div>
         </div>
         <div class="field-row">
@@ -264,6 +293,6 @@
   </section>
 </main>
 
-<script src="/app.js?v=33"></script>
+<script src="/app.js?v=35"></script>
 </body>
 </html>
